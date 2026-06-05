@@ -1,0 +1,5 @@
+# PostgreSQL driver.
+psycopg[binary]>=3.2,<4
+
+# Market data collector.
+akshare>=1.18,<2
