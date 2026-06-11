@@ -24,7 +24,7 @@ class SkillTests(unittest.TestCase):
             skill_dir = Path(temp_dir) / "demo"
             skill_dir.mkdir()
             (skill_dir / "SKILL.md").write_text(
-                "---\nname: demo\ndescription: Demo skill\n---\n\nBody text",
+                "---\nname: demo\ndescription: Demo skill\nversion: 1.0\n---\n\nBody text",
                 encoding="utf-8",
             )
 
@@ -32,7 +32,17 @@ class SkillTests(unittest.TestCase):
 
         self.assertEqual(1, len(skills))
         self.assertEqual("demo", skills[0].name)
+        self.assertEqual("1.0", skills[0].version)
         self.assertEqual("Body text", skills[0].body)
+
+    def test_stock_review_skill_is_available(self) -> None:
+        skills = list_skills(Settings())
+
+        stock_review = [skill for skill in skills if skill.name == "stock-review"]
+
+        self.assertEqual(1, len(stock_review))
+        self.assertEqual("1.2", stock_review[0].version)
+        self.assertIn("两市总量能", stock_review[0].body)
 
     def test_render_skill_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

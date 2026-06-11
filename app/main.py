@@ -74,6 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
     list_market_parser.add_argument("--instrument-type", default=None, help="标的类型，例如 stock 或 index")
     list_market_parser.add_argument("--limit", type=int, default=10, help="返回条数")
 
+    analyze_market_parser = subparsers.add_parser("analyze-market", help="分析已入库行情的市场上下文")
+    analyze_market_parser.add_argument("--date", default=date.today().isoformat(), help="交易日期，格式 YYYY-MM-DD")
+    analyze_market_parser.add_argument("--limit", type=int, default=1000, help="读取行情快照数量")
+
     subparsers.add_parser("list-skills", help="列出可用 Skills")
     show_skill_parser = subparsers.add_parser("show-skill", help="显示指定 Skill 内容")
     show_skill_parser.add_argument("name", help="Skill 名称")
@@ -471,6 +475,55 @@ def list_market_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def analyze_market_command(args: argparse.Namespace) -> int:
+    from analysis.market_context import build_market_context
+    from storage.db import connect
+    from storage.models import MarketSnapshotQuery
+    from storage.repositories import MarketSnapshotRepository
+
+    settings = load_settings()
+    setup_logging(settings)
+    trade_date = parse_date_arg(args.date)
+    with connect(settings) as connection:
+        snapshots = MarketSnapshotRepository(connection).list(MarketSnapshotQuery(trade_date=trade_date, limit=args.limit))
+    context = build_market_context(snapshots, trade_date)
+
+    print(f"date={context.trade_date.isoformat()} snapshots={context.snapshot_count} stocks={context.stock_count} indexes={context.index_count}")
+    print(f"observed_total_amount={context.observed_total_amount:.0f} amount_tier={context.amount_tier}")
+    print(f"market_style={context.market_style} sentiment_cycle={context.sentiment_cycle}")
+    print("indexes=" + format_instruments(context.indexes))
+    print("strong_stocks=" + format_instruments(context.strong_stocks[:5]))
+    print("weak_stocks=" + format_instruments(context.weak_stocks[:5]))
+    print("volume_leaders=" + format_instruments(context.volume_leaders[:5]))
+    print("sector_hotspots=" + format_sectors(context.sector_hotspots[:5]))
+    print("evidence_gaps=" + ",".join(context.evidence_gaps))
+    return 0
+
+
+def format_instruments(instruments) -> str:
+    if not instruments:
+        return "none"
+    return "; ".join(
+        f"{item.code} {item.name} pct={format_optional_float(item.pct_chg)} amount={format_optional_float(item.amount)}"
+        for item in instruments
+    )
+
+
+def format_sectors(sectors) -> str:
+    if not sectors:
+        return "none"
+    return "; ".join(
+        f"{item.sector} count={item.stock_count} avg_pct={format_optional_float(item.average_pct_chg)} amount={format_optional_float(item.total_amount)}"
+        for item in sectors
+    )
+
+
+def format_optional_float(value) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.2f}"
+
+
 def list_skills_command() -> int:
     from app.skills import list_skills
 
@@ -482,7 +535,8 @@ def list_skills_command() -> int:
 
     for skill in skills:
         stage = f" | stage={skill.stage}" if skill.stage else ""
-        print(f"{skill.name} | {skill.description}{stage}")
+        version = f" | version={skill.version}" if skill.version else ""
+        print(f"{skill.name} | {skill.description}{stage}{version}")
     return 0
 
 
@@ -494,6 +548,8 @@ def show_skill_command(args: argparse.Namespace) -> int:
     print(f"# {skill.name}")
     if skill.description:
         print(f"\n{skill.description}")
+    if skill.version:
+        print(f"\nVersion: {skill.version}")
     print(f"\nPath: {skill.path}")
     print("\n---\n")
     print(skill.body)
@@ -559,6 +615,8 @@ def main() -> int:
         return list_chunks_command(args)
     if args.command == "list-market":
         return list_market_command(args)
+    if args.command == "analyze-market":
+        return analyze_market_command(args)
     if args.command == "list-skills":
         return list_skills_command()
     if args.command == "show-skill":

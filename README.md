@@ -104,3 +104,21 @@ Notion 页面变化后，可以用一个命令刷新本地切块和向量库：
 
 `sync-vector-index` 会先按 `raw_document_id` 删除 Qdrant 中已有 points，再写入当前切块。
 因此更新同一篇 Notion 页面不会持续追加重复向量。
+
+## 市场上下文分析
+
+`stock-review` 是复盘框架 Skill，用来约束大盘阶段、量能、市场风格、情绪周期、核心板块、核心票和预演方式。Notion 经验库继续用于动态案例和最近复盘经验。
+
+优先级约定：
+
+```text
+事实数据 > SKILL 框架 > Notion 经验 > LLM 推断
+```
+
+分析已入库行情：
+
+```bash
+.\.venv\Scripts\python -m app.main analyze-market --date 2026-06-11
+```
+
+当前版本只基于 `market_snapshots` 做确定性分析，包括已采集成交额分档、指数/个股数量、强弱标的、成交额排行，以及可选的 `metadata.sector` 板块聚合。没有足够数据的市场风格、情绪周期和板块映射会明确输出 `unknown` 或 `evidence_gaps`，不强行推断。
