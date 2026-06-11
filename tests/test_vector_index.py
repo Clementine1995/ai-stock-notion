@@ -42,12 +42,15 @@ class FakeQdrantClient:
     def __init__(self) -> None:
         self.deleted = []
         self.upserted = []
+        self.events = []
 
     def delete_by_raw_document_id(self, raw_document_id):
         self.deleted.append(raw_document_id)
+        self.events.append(("delete", raw_document_id))
 
     def upsert_points(self, points):
         self.upserted.extend(points)
+        self.events.append(("upsert", [point["id"] for point in points]))
 
     def search(self, vector, limit):
         self.vector = vector
@@ -187,6 +190,13 @@ class VectorIndexTests(unittest.TestCase):
         self.assertEqual(2, result.chunk_count)
         self.assertEqual(1, result.document_count)
         self.assertEqual(["doc-1"], qdrant_client.deleted)
+        self.assertEqual(
+            [
+                ("delete", "doc-1"),
+                ("upsert", ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"]),
+            ],
+            qdrant_client.events,
+        )
         self.assertEqual(["first", "second"], embedding_client.inputs[0])
         self.assertEqual(2, len(qdrant_client.upserted))
         self.assertEqual([(["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"], "embedded")], chunk_repository.updated)

@@ -85,3 +85,22 @@ Verify connectivity:
 ```bash
 .\.venv\Scripts\python -m app.main test-llm
 ```
+
+## 知识库刷新
+
+Notion 页面变化后，可以用一个命令刷新本地切块和向量库：
+
+```bash
+.\.venv\Scripts\python -m app.main refresh-knowledge
+```
+
+该命令等价于依次运行：
+
+```bash
+.\.venv\Scripts\python -m app.main sync-notion
+.\.venv\Scripts\python -m app.main build-index --source notion --doc-type note
+.\.venv\Scripts\python -m app.main sync-vector-index
+```
+
+`sync-vector-index` 会先按 `raw_document_id` 删除 Qdrant 中已有 points，再写入当前切块。
+因此更新同一篇 Notion 页面不会持续追加重复向量。

@@ -18,6 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("sync-notion", help="同步 Notion 经验文档")
+    subparsers.add_parser("refresh-knowledge", help="同步 Notion 并刷新本地和向量知识库")
 
     collect_parser = subparsers.add_parser("collect", help="采集公告、新闻和行情")
     add_market_collect_args(collect_parser)
@@ -298,6 +299,21 @@ def sync_notion_command() -> int:
     return 0
 
 
+def refresh_knowledge_command() -> int:
+    sync_notion_command()
+    build_index_command(
+        argparse.Namespace(
+            source="notion",
+            doc_type="note",
+            limit=100,
+            chunk_size=1200,
+            overlap=150,
+        )
+    )
+    sync_vector_index_command(argparse.Namespace(embedding_status="pending", limit=100))
+    return 0
+
+
 def build_index_command(args: argparse.Namespace) -> int:
     from analysis.indexing import build_local_index
     from storage.db import connect, init_db
@@ -527,6 +543,8 @@ def main() -> int:
         return init_db_command()
     if args.command == "sync-notion":
         return sync_notion_command()
+    if args.command == "refresh-knowledge":
+        return refresh_knowledge_command()
     if args.command == "build-index":
         return build_index_command(args)
     if args.command == "sync-vector-index":
