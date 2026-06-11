@@ -123,6 +123,28 @@ Notion 页面变化后，可以用一个命令刷新本地切块和向量库：
 
 当前版本只基于 `market_snapshots` 做确定性分析，包括已采集成交额分档、指数/个股数量、强弱标的、成交额排行，以及可选的 `metadata.sector` 板块聚合。没有足够数据的市场风格、情绪周期和板块映射会明确输出 `unknown` 或 `evidence_gaps`，不强行推断。
 
+### 更新 stock-review Skill
+
+`stock-review` 是可持续迭代的本地规则源，更新入口是：
+
+```text
+skills/stock-review/SKILL.md
+```
+
+更新规则：
+
+- 修改正文时同步提升 frontmatter 里的 `version`。
+- frontmatter 可以继续增加自定义字段，例如 `updated_at`、`owner`、`applies_to`；程序会保留完整 metadata。
+- 后续分析命令会从文件系统读取当前版本，不需要重启服务。
+- 如果未来把 Skill 内容也写入向量库，更新后再执行 `refresh-knowledge` 或对应的索引刷新命令。
+
+验证命令：
+
+```bash
+.\.venv\Scripts\python -m app.main list-skills
+.\.venv\Scripts\python -m app.main show-skill stock-review
+```
+
 ## 事件抽取与评分
 
 M5 的第一版事件分析先使用确定性规则，不调用 LLM。它会从已入库公告和新闻抽取 `ExtractedEvent`，再结合当天 `MarketContext` 输出评分：

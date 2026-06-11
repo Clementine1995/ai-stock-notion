@@ -17,6 +17,7 @@ class Skill:
     body: str
     stage: str = ""
     version: str = ""
+    metadata: dict[str, str] | None = None
 
 
 def resolve_skills_dir(settings: Settings) -> Path:
@@ -52,6 +53,7 @@ def load_skill_file(path: Path) -> Skill:
         description=metadata.get("description", ""),
         stage=metadata.get("stage", ""),
         version=metadata.get("version", ""),
+        metadata=metadata,
         path=path,
         body=body.strip(),
     )
