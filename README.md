@@ -122,3 +122,18 @@ Notion 页面变化后，可以用一个命令刷新本地切块和向量库：
 ```
 
 当前版本只基于 `market_snapshots` 做确定性分析，包括已采集成交额分档、指数/个股数量、强弱标的、成交额排行，以及可选的 `metadata.sector` 板块聚合。没有足够数据的市场风格、情绪周期和板块映射会明确输出 `unknown` 或 `evidence_gaps`，不强行推断。
+
+## 事件抽取与评分
+
+M5 的第一版事件分析先使用确定性规则，不调用 LLM。它会从已入库公告和新闻抽取 `ExtractedEvent`，再结合当天 `MarketContext` 输出评分：
+
+```bash
+.\.venv\Scripts\python -m app.main score-events --date 2026-06-11 --doc-type announcement
+```
+
+输出为 JSON Lines，每行包含：
+
+- `event`：事件类型、影响方向、相关股票、相关板块、证据和置信度。
+- `score`：催化、新鲜度、预期差、板块扩散、流动性、风险和 A/B/C 优先级。
+
+板块映射来自 `config/sector_keywords.yaml`。如果行情、板块或证据不足，评分会在 `rationale` 中保留缺口，而不是强行给确定结论。

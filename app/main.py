@@ -78,6 +78,12 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_market_parser.add_argument("--date", default=date.today().isoformat(), help="交易日期，格式 YYYY-MM-DD")
     analyze_market_parser.add_argument("--limit", type=int, default=1000, help="读取行情快照数量")
 
+    score_events_parser = subparsers.add_parser("score-events", help="抽取并评分已入库公告和新闻事件")
+    score_events_parser.add_argument("--date", default=date.today().isoformat(), help="文档发布日期，格式 YYYY-MM-DD")
+    score_events_parser.add_argument("--doc-type", default=None, help="文档类型，例如 announcement 或 news")
+    score_events_parser.add_argument("--source", default=None, help="文档来源，例如 akshare 或 akshare_eastmoney")
+    score_events_parser.add_argument("--limit", type=int, default=20, help="处理文档数量")
+
     subparsers.add_parser("list-skills", help="列出可用 Skills")
     show_skill_parser = subparsers.add_parser("show-skill", help="显示指定 Skill 内容")
     show_skill_parser.add_argument("name", help="Skill 名称")
@@ -500,6 +506,40 @@ def analyze_market_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def score_events_command(args: argparse.Namespace) -> int:
+    import json
+    from datetime import datetime, time
+
+    from analysis.events import extract_event, score_event
+    from analysis.market_context import build_market_context
+    from storage.db import connect
+    from storage.models import MarketSnapshotQuery, RawDocumentQuery
+    from storage.repositories import MarketSnapshotRepository, RawDocumentRepository
+
+    settings = load_settings()
+    setup_logging(settings)
+    active_date = parse_date_arg(args.date)
+    start_time = datetime.combine(active_date, time.min)
+    end_time = datetime.combine(active_date, time.max)
+    with connect(settings) as connection:
+        documents = RawDocumentRepository(connection).list(
+            RawDocumentQuery(
+                start_time=start_time,
+                end_time=end_time,
+                doc_type=args.doc_type,
+                source=args.source,
+                limit=args.limit,
+            )
+        )
+        snapshots = MarketSnapshotRepository(connection).list(MarketSnapshotQuery(trade_date=active_date, limit=1000))
+    market_context = build_market_context(snapshots, active_date)
+    for document in documents:
+        event = extract_event(document)
+        score = score_event(event, market_context)
+        print(json.dumps({"event": event.to_dict(), "score": score.to_dict()}, ensure_ascii=False))
+    return 0
+
+
 def format_instruments(instruments) -> str:
     if not instruments:
         return "none"
@@ -617,6 +657,8 @@ def main() -> int:
         return list_market_command(args)
     if args.command == "analyze-market":
         return analyze_market_command(args)
+    if args.command == "score-events":
+        return score_events_command(args)
     if args.command == "list-skills":
         return list_skills_command()
     if args.command == "show-skill":
