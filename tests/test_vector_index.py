@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import unittest
+import io
 import json
+import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 from analysis.vector_index import QdrantClient, build_qdrant_point, search_knowledge, sync_vector_index
@@ -56,6 +58,7 @@ class FakeQdrantClient:
 class VectorIndexTests(unittest.TestCase):
     def test_qdrant_client_ensure_collection_sends_vector_config_and_api_key(self) -> None:
         captured = {}
+        requests = []
 
         class FakeResponse:
             def __enter__(self):
@@ -73,6 +76,7 @@ class VectorIndexTests(unittest.TestCase):
             captured["headers"] = dict(request.header_items())
             captured["payload"] = json.loads(request.data.decode("utf-8"))
             captured["timeout"] = timeout
+            requests.append((request.full_url, request.get_method(), captured["payload"]))
             return FakeResponse()
 
         settings = Settings(
@@ -84,14 +88,55 @@ class VectorIndexTests(unittest.TestCase):
         with patch("analysis.vector_index.urlopen", side_effect=fake_urlopen):
             QdrantClient(settings).ensure_collection(1024)
 
-        self.assertEqual("https://example.qdrant.io/collections/market_knowledge", captured["url"])
-        self.assertEqual("PUT", captured["method"])
         self.assertEqual("secret", captured["headers"]["Api-key"])
-        self.assertEqual({"vectors": {"size": 1024, "distance": "Cosine"}}, captured["payload"])
+        self.assertEqual(
+            [
+                (
+                    "https://example.qdrant.io/collections/market_knowledge",
+                    "PUT",
+                    {"vectors": {"size": 1024, "distance": "Cosine"}},
+                ),
+                (
+                    "https://example.qdrant.io/collections/market_knowledge/index",
+                    "PUT",
+                    {"field_name": "raw_document_id", "field_schema": "keyword"},
+                ),
+            ],
+            requests,
+        )
 
     def test_qdrant_client_ensure_collection_rejects_missing_dimension(self) -> None:
         with self.assertRaises(ValueError):
             QdrantClient(Settings()).ensure_collection(0)
+
+    def test_qdrant_client_ensure_collection_ignores_existing_collection_and_index(self) -> None:
+        requests = []
+
+        def fake_urlopen(request, timeout):
+            requests.append((request.full_url, request.get_method(), timeout))
+            raise HTTPError(
+                request.full_url,
+                409,
+                "Conflict",
+                hdrs=None,
+                fp=io.BytesIO(b'{"status":{"error":"already exists"}}'),
+            )
+
+        settings = Settings(
+            qdrant_url="https://example.qdrant.io",
+            qdrant_collection="market_knowledge",
+        )
+
+        with patch("analysis.vector_index.urlopen", side_effect=fake_urlopen):
+            QdrantClient(settings).ensure_collection(1024)
+
+        self.assertEqual(
+            [
+                ("https://example.qdrant.io/collections/market_knowledge", "PUT", 30),
+                ("https://example.qdrant.io/collections/market_knowledge/index", "PUT", 30),
+            ],
+            requests,
+        )
 
     def test_build_qdrant_point_carries_chunk_payload(self) -> None:
         chunk = DocumentChunk(

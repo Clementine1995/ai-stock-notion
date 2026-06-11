@@ -38,7 +38,12 @@ class QdrantClient:
         if vector_size <= 0:
             raise ValueError("EMBEDDING_DIMENSION must be greater than 0 to create a Qdrant collection.")
         payload = {"vectors": {"size": vector_size, "distance": distance}}
-        self._request("PUT", f"/collections/{self.collection}", payload)
+        self._request("PUT", f"/collections/{self.collection}", payload, ignored_statuses={409})
+        self.ensure_payload_index("raw_document_id", "keyword")
+
+    def ensure_payload_index(self, field_name: str, field_schema: str) -> None:
+        payload = {"field_name": field_name, "field_schema": field_schema}
+        self._request("PUT", f"/collections/{self.collection}/index", payload, ignored_statuses={409})
 
     def delete_by_raw_document_id(self, raw_document_id: str) -> None:
         payload = {
@@ -70,7 +75,13 @@ class QdrantClient:
             for item in response.get("result", [])
         ]
 
-    def _request(self, method: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any],
+        ignored_statuses: set[int] | None = None,
+    ) -> dict[str, Any]:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["api-key"] = self.api_key
@@ -85,6 +96,8 @@ class QdrantClient:
                 body = response.read().decode("utf-8")
                 return json.loads(body) if body else {}
         except HTTPError as exc:
+            if ignored_statuses and exc.code in ignored_statuses:
+                return {}
             message = exc.read().decode("utf-8", errors="replace")
             raise VectorIndexError(f"Qdrant request failed: {exc.code} {message}") from exc
 
