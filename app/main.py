@@ -545,6 +545,15 @@ def generate_observations_command(args: argparse.Namespace) -> int:
 
 
 def load_documents_and_market_context(args: argparse.Namespace, active_date):
+    return load_documents_and_market_context_for_filters(
+        active_date,
+        doc_type=args.doc_type,
+        source=args.source,
+        limit=args.limit,
+    )
+
+
+def load_documents_and_market_context_for_filters(active_date, doc_type=None, source=None, limit=100):
     from datetime import datetime, time
 
     from analysis.market_context import build_market_context
@@ -561,9 +570,9 @@ def load_documents_and_market_context(args: argparse.Namespace, active_date):
             RawDocumentQuery(
                 start_time=start_time,
                 end_time=end_time,
-                doc_type=args.doc_type,
-                source=args.source,
-                limit=args.limit,
+                doc_type=doc_type,
+                source=source,
+                limit=limit,
             )
         )
         snapshots = MarketSnapshotRepository(connection).list(MarketSnapshotQuery(trade_date=active_date, limit=1000))
@@ -648,6 +657,46 @@ def test_llm_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def report_command(args: argparse.Namespace) -> int:
+    from analysis.events import extract_event, score_event
+    from analysis.observations import build_observation_candidate
+    from app.reports import ScoredEvent, build_after_close_report, build_noon_report, build_pre_market_report, write_report
+    from app.skills import load_skill
+
+    if args.report_type not in {"after-close", "pre-market", "noon"}:
+        return run_placeholder(f"report {args.report_type}")
+
+    settings = load_settings()
+    setup_logging(settings)
+    trade_date = parse_date_arg(args.date)
+    documents, market_context = load_documents_and_market_context_for_filters(trade_date, limit=100)
+    scored_events = []
+    observations = []
+    for document in documents:
+        event = extract_event(document)
+        score = score_event(event, market_context)
+        scored_events.append(ScoredEvent(event=event, score=score))
+        candidate = build_observation_candidate(event, score, trade_date, report_type="pre_market")
+        if candidate is not None:
+            observations.append(candidate)
+    try:
+        stock_review_skill = load_skill(settings, "stock-review")
+    except FileNotFoundError:
+        stock_review_skill = None
+
+    if args.report_type == "after-close":
+        report = build_after_close_report(trade_date, market_context, scored_events, observations, stock_review_skill)
+        path = write_report(settings.report_output_dir, trade_date, "after_close", report)
+    elif args.report_type == "noon":
+        report = build_noon_report(trade_date, market_context, scored_events, observations, stock_review_skill)
+        path = write_report(settings.report_output_dir, trade_date, "noon", report)
+    else:
+        report = build_pre_market_report(trade_date, market_context, scored_events, observations, stock_review_skill)
+        path = write_report(settings.report_output_dir, trade_date, "pre_market", report)
+    print(path)
+    return 0
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -697,6 +746,8 @@ def main() -> int:
         return show_skill_command(args)
     if args.command == "test-llm":
         return test_llm_command(args)
+    if args.command == "report":
+        return report_command(args)
     return run_placeholder(args.command)
 
 
