@@ -133,13 +133,13 @@ def build_after_close_report(
             lines.append(format_news_summary(item))
 
     lines.extend(["", "## 今日推演验证"])
-    lines.append("- Observation 入库和回填尚未接入，当前只能展示本次复盘生成的候选验证项。")
+    lines.append("- 当前展示待复盘观察项，用于对照盘前推演是否成立；最终状态仍需用户复盘确认。")
     if not observations:
         lines.append("- 今日暂无可验证的 A/B 级观察项。")
     else:
         for observation in sort_observations(observations):
             lines.append(
-                f"- [{observation.priority}] {observation.theme}：对照成立条件“{observation.validation_condition}”，"
+                f"- [{observation.priority}] {observation.theme}：推演“{observation.hypothesis}”；对照成立条件“{observation.validation_condition}”，"
                 f"失效条件“{observation.invalid_condition}”。"
             )
 
@@ -186,13 +186,13 @@ def build_noon_report(
             "## 上午市场与盘前推演对比",
             f"- 指数表现：{format_instruments(market_context.indexes[:3])}",
             f"- 两市量能：{describe_amount_tier(market_context.amount_tier)}（观测成交额 {format_amount(market_context.observed_total_amount)}）",
-            "- Observation 入库和盘前观察项读取尚未接入，当前报告先展示本次生成的候选观察项供人工对照。",
+            "- 当前展示待复盘观察项，用于对照上午走势和盘前推演；最终状态仍需用户复盘确认。",
         ]
     )
     if observations:
         for observation in sort_observations(observations):
             lines.append(
-                f"- [{observation.priority}] {observation.theme}：对照成立条件“{observation.validation_condition}”，"
+                f"- [{observation.priority}] {observation.theme}：推演“{observation.hypothesis}”；对照成立条件“{observation.validation_condition}”，"
                 f"失效条件“{observation.invalid_condition}”。"
             )
     else:

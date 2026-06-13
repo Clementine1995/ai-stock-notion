@@ -11,10 +11,10 @@ from analysis.events import EventScore, ExtractedEvent
 from analysis.market_context import MarketContext, MarketInstrumentSummary, SectorHotspot
 from analysis.observations import ObservationCandidate
 from app.config import Settings
-from app.main import normalize_cli_report_type, report_command
+from app.main import normalize_cli_report_type, observation_candidate_from_observation, report_command
 from app.reports import ScoredEvent, build_after_close_report, build_noon_report, build_pre_market_report, write_report
 from app.skills import Skill
-from storage.models import RawDocument
+from storage.models import Observation, RawDocument
 
 
 class ReportTests(unittest.TestCase):
@@ -107,7 +107,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("## 今日推演验证", report)
         self.assertIn("## 明日观察方向", report)
         self.assertIn("## 风险清单", report)
-        self.assertIn("Observation 入库和回填尚未接入", report)
+        self.assertIn("当前展示待复盘观察项", report)
         self.assertIn("核心票锚点：000001 平安银行", report)
         assert_no_unconditional_trade_instruction(self, report)
 
@@ -218,7 +218,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("## 降低关注方向", report)
         self.assertIn("## 重要公告和新闻", report)
         self.assertIn("某股东拟减持公司股份", report)
-        self.assertIn("Observation 入库和盘前观察项读取尚未接入", report)
+        self.assertIn("当前展示待复盘观察项", report)
         assert_no_unconditional_trade_instruction(self, report)
 
     def test_build_pre_market_report_renders_required_sections(self) -> None:
@@ -382,7 +382,7 @@ class ReportTests(unittest.TestCase):
                     ],
                     market_context,
                 ),
-            ), patch(
+            ), patch("app.main.load_saved_pending_observations", return_value=[]), patch(
                 "app.skills.load_skill",
                 return_value=Skill(
                     name="stock-review",
@@ -438,7 +438,7 @@ class ReportTests(unittest.TestCase):
                     ],
                     market_context,
                 ),
-            ), patch(
+            ), patch("app.main.load_saved_pending_observations", return_value=[]), patch(
                 "app.skills.load_skill",
                 return_value=Skill(
                     name="stock-review",
@@ -456,6 +456,61 @@ class ReportTests(unittest.TestCase):
             content = report_path.read_text(encoding="utf-8")
             self.assertIn("盘后复盘报告", content)
             self.assertIn("## 明日观察方向", content)
+
+    def test_report_command_uses_saved_pending_observations_for_noon(self) -> None:
+        trade_date = date(2026, 6, 12)
+        market_context = MarketContext(
+            trade_date=trade_date,
+            snapshot_count=2,
+            stock_count=1,
+            index_count=1,
+            observed_total_amount=1_230_000_000_000,
+            amount_tier="above_1t_supports_one_main_sector",
+            indexes=[MarketInstrumentSummary(code="sh000001", name="上证指数", pct_chg=0.82, amount=None, turnover_rate=None, source="akshare")],
+            strong_stocks=[],
+            weak_stocks=[],
+            volume_leaders=[],
+            sector_hotspots=[],
+            market_style="unknown",
+            sentiment_cycle="unknown",
+            evidence_gaps=[],
+        )
+        saved_observation = Observation(
+            id="obs-1",
+            trade_date=trade_date,
+            report_type="pre_market",
+            theme="已保存主题",
+            related_stocks=["000001"],
+            hypothesis="已保存观察项应被午间报告读取。",
+            validation_condition="核心标的继续走强。",
+            invalid_condition="核心标的走弱。",
+            priority="A",
+            source_event_ids=["doc-saved"],
+            evidence=["saved:evidence"],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(report_output_dir=temp_dir)
+            args = Namespace(report_type="noon", date="2026-06-12")
+            with patch("app.main.load_settings", return_value=settings), patch("app.main.setup_logging"), patch(
+                "app.main.load_documents_and_market_context_for_filters",
+                return_value=([], market_context),
+            ), patch("app.main.load_saved_pending_observations", return_value=[saved_observation]), patch(
+                "app.skills.load_skill",
+                return_value=Skill(
+                    name="stock-review",
+                    description="desc",
+                    path=Path("skills/stock-review/SKILL.md"),
+                    body="body",
+                    version="1.2",
+                ),
+            ), patch("builtins.print"):
+                exit_code = report_command(args)
+
+            self.assertEqual(0, exit_code)
+            report_path = Path(temp_dir) / "2026-06-12_noon.md"
+            content = report_path.read_text(encoding="utf-8")
+            self.assertIn("已保存主题", content)
+            self.assertIn("已保存观察项应被午间报告读取", content)
 
     def test_report_command_generates_noon_file(self) -> None:
         trade_date = date(2026, 6, 12)
@@ -494,7 +549,7 @@ class ReportTests(unittest.TestCase):
                     ],
                     market_context,
                 ),
-            ), patch(
+            ), patch("app.main.load_saved_pending_observations", return_value=[]), patch(
                 "app.skills.load_skill",
                 return_value=Skill(
                     name="stock-review",
@@ -512,6 +567,28 @@ class ReportTests(unittest.TestCase):
             content = report_path.read_text(encoding="utf-8")
             self.assertIn("午间复盘报告", content)
             self.assertIn("## 下午机会", content)
+
+    def test_observation_candidate_from_observation(self) -> None:
+        observation = Observation(
+            id="obs-1",
+            trade_date=date(2026, 6, 12),
+            report_type="pre_market",
+            theme="AI",
+            related_stocks=["000001"],
+            hypothesis="观察 AI 是否继续加强。",
+            validation_condition="板块放量。",
+            invalid_condition="板块无跟随。",
+            priority="A",
+            source_event_ids=["doc-1"],
+            evidence=["evidence"],
+        )
+
+        candidate = observation_candidate_from_observation(observation)
+
+        self.assertEqual("AI", candidate.theme)
+        self.assertEqual("pre_market", candidate.report_type)
+        self.assertEqual(["000001"], candidate.related_stocks)
+        self.assertEqual(["doc-1"], candidate.source_event_ids)
 
 
 def assert_no_unconditional_trade_instruction(test_case: unittest.TestCase, report: str) -> None:

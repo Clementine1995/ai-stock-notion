@@ -123,8 +123,13 @@ def build_parser() -> argparse.ArgumentParser:
         child = report_subparsers.add_parser(report_type, help=f"生成 {report_type} 报告")
         child.add_argument("--date", default=date.today().isoformat(), help="交易日期，格式 YYYY-MM-DD")
 
-    review_parser = subparsers.add_parser("review", help="回填观察项结果")
+    review_parser = subparsers.add_parser("review", help="复盘观察项")
     review_parser.add_argument("--date", default=date.today().isoformat(), help="交易日期，格式 YYYY-MM-DD")
+    review_parser.add_argument("--id", default="", help="观察项 ID；提供后会回填该观察项")
+    review_parser.add_argument("--status", default=None, choices=("pending", "hit", "miss", "invalid"), help="观察项状态")
+    review_parser.add_argument("--outcome", default="", help="实际结果")
+    review_parser.add_argument("--review-note", default="", help="复盘结论")
+    review_parser.add_argument("--limit", type=int, default=20, help="未提供 ID 时返回 pending 观察项条数")
 
     subparsers.add_parser("show-config", help="显示当前配置概览")
     return parser
@@ -628,6 +633,43 @@ def update_observation_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def review_command(args: argparse.Namespace) -> int:
+    from analysis.market_context import build_market_context
+    from analysis.review import suggest_observation_status
+    from storage.db import connect
+    from storage.models import MarketSnapshotQuery, ObservationQuery
+    from storage.repositories import MarketSnapshotRepository, ObservationRepository
+
+    settings = load_settings()
+    setup_logging(settings)
+    trade_date = parse_date_arg(args.date)
+    with connect(settings) as connection:
+        repository = ObservationRepository(connection)
+        if args.id:
+            if args.status is None:
+                raise ValueError("--status is required when --id is provided")
+            count = repository.update_status(args.id, args.status, outcome=args.outcome, review_note=args.review_note)
+            print(f"updated_observations={count}")
+            return 0
+        observations = repository.list(ObservationQuery(trade_date=trade_date, status="pending", limit=args.limit))
+        snapshots = MarketSnapshotRepository(connection).list(MarketSnapshotQuery(trade_date=trade_date, limit=1000))
+    if not observations:
+        print("No pending observations found.")
+        return 0
+    market_context = build_market_context(snapshots, trade_date)
+    for observation in observations:
+        suggestion = suggest_observation_status(observation, market_context)
+        print(
+            f"{observation.id} | {observation.trade_date.isoformat()} | {observation.report_type} | "
+            f"{observation.priority} | {observation.theme} | stocks={','.join(observation.related_stocks) or 'none'}"
+        )
+        print(f"  hypothesis={observation.hypothesis}")
+        print(f"  validation={observation.validation_condition}")
+        print(f"  invalid={observation.invalid_condition}")
+        print(f"  suggestion={suggestion.status} | rationale={'; '.join(suggestion.rationale)}")
+    return 0
+
+
 def observation_from_candidate(candidate):
     from storage.models import Observation
     from storage.repositories import build_observation_id
@@ -776,18 +818,19 @@ def report_command(args: argparse.Namespace) -> int:
     normalized_report_type = normalize_cli_report_type(args.report_type)
     documents, market_context = load_documents_and_market_context_for_filters(trade_date, limit=100)
     scored_events = []
-    observations = []
+    generated_observations = []
     for document in documents:
         event = extract_event(document)
         score = score_event(event, market_context)
         scored_events.append(ScoredEvent(event=event, score=score))
         candidate = build_observation_candidate(event, score, trade_date, report_type=normalized_report_type)
         if candidate is not None:
-            observations.append(candidate)
+            generated_observations.append(candidate)
     try:
         stock_review_skill = load_skill(settings, "stock-review")
     except FileNotFoundError:
         stock_review_skill = None
+    observations = resolve_report_observations(trade_date, normalized_report_type, generated_observations, settings)
 
     if args.report_type == "after-close":
         report = build_after_close_report(trade_date, market_context, scored_events, observations, stock_review_skill)
@@ -804,6 +847,42 @@ def report_command(args: argparse.Namespace) -> int:
 
 def normalize_cli_report_type(report_type: str) -> str:
     return report_type.replace("-", "_")
+
+
+def resolve_report_observations(trade_date, report_type: str, generated_observations, settings):
+    if report_type == "pre_market":
+        return generated_observations
+    saved_observations = load_saved_pending_observations(trade_date, settings)
+    if saved_observations:
+        return [observation_candidate_from_observation(observation) for observation in saved_observations]
+    return generated_observations
+
+
+def load_saved_pending_observations(trade_date, settings):
+    from storage.db import connect
+    from storage.models import ObservationQuery
+    from storage.repositories import ObservationRepository
+
+    with connect(settings) as connection:
+        return ObservationRepository(connection).list(ObservationQuery(trade_date=trade_date, status="pending", limit=100))
+
+
+def observation_candidate_from_observation(observation):
+    from analysis.observations import ObservationCandidate
+
+    return ObservationCandidate(
+        trade_date=observation.trade_date,
+        report_type=observation.report_type,
+        theme=observation.theme,
+        related_stocks=observation.related_stocks,
+        hypothesis=observation.hypothesis,
+        validation_condition=observation.validation_condition,
+        invalid_condition=observation.invalid_condition,
+        priority=observation.priority,
+        status=observation.status,
+        source_event_ids=observation.source_event_ids,
+        evidence=observation.evidence,
+    )
 
 
 def main() -> int:
@@ -855,6 +934,8 @@ def main() -> int:
         return list_observations_command(args)
     if args.command == "update-observation":
         return update_observation_command(args)
+    if args.command == "review":
+        return review_command(args)
     if args.command == "list-skills":
         return list_skills_command()
     if args.command == "show-skill":
