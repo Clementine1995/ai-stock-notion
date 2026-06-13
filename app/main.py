@@ -91,6 +91,25 @@ def build_parser() -> argparse.ArgumentParser:
     observation_parser.add_argument("--source", default=None, help="文档来源，例如 akshare 或 akshare_eastmoney")
     observation_parser.add_argument("--limit", type=int, default=20, help="处理文档数量")
 
+    save_observations_parser = subparsers.add_parser("save-observations", help="生成候选观察项并保存入库")
+    save_observations_parser.add_argument("--date", default=date.today().isoformat(), help="交易日期，格式 YYYY-MM-DD")
+    save_observations_parser.add_argument("--report-type", default="pre_market", choices=("after_close", "pre_market", "noon"), help="观察项所属报告类型")
+    save_observations_parser.add_argument("--doc-type", default=None, help="文档类型，例如 announcement 或 news")
+    save_observations_parser.add_argument("--source", default=None, help="文档来源，例如 akshare 或 akshare_eastmoney")
+    save_observations_parser.add_argument("--limit", type=int, default=20, help="处理文档数量")
+
+    list_observations_parser = subparsers.add_parser("list-observations", help="列出已保存观察项")
+    list_observations_parser.add_argument("--date", default=None, help="交易日期，格式 YYYY-MM-DD")
+    list_observations_parser.add_argument("--report-type", default=None, choices=("after_close", "pre_market", "noon"), help="观察项所属报告类型")
+    list_observations_parser.add_argument("--status", default=None, choices=("pending", "hit", "miss", "invalid"), help="观察项状态")
+    list_observations_parser.add_argument("--limit", type=int, default=20, help="返回条数")
+
+    update_observation_parser = subparsers.add_parser("update-observation", help="回填观察项状态")
+    update_observation_parser.add_argument("id", help="观察项 ID")
+    update_observation_parser.add_argument("--status", required=True, choices=("pending", "hit", "miss", "invalid"), help="观察项状态")
+    update_observation_parser.add_argument("--outcome", default="", help="实际结果")
+    update_observation_parser.add_argument("--review-note", default="", help="复盘结论")
+
     subparsers.add_parser("list-skills", help="列出可用 Skills")
     show_skill_parser = subparsers.add_parser("show-skill", help="显示指定 Skill 内容")
     show_skill_parser.add_argument("name", help="Skill 名称")
@@ -544,6 +563,91 @@ def generate_observations_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def save_observations_command(args: argparse.Namespace) -> int:
+    from analysis.events import extract_event, score_event
+    from analysis.observations import build_observation_candidate
+    from storage.db import connect
+    from storage.repositories import ObservationRepository
+
+    active_date = parse_date_arg(args.date)
+    documents, market_context = load_documents_and_market_context(args, active_date)
+    observations = []
+    for document in documents:
+        event = extract_event(document)
+        score = score_event(event, market_context)
+        candidate = build_observation_candidate(event, score, active_date, report_type=args.report_type)
+        if candidate is not None:
+            observations.append(observation_from_candidate(candidate))
+
+    settings = load_settings()
+    setup_logging(settings)
+    with connect(settings) as connection:
+        count = ObservationRepository(connection).upsert_many(observations)
+    print(f"saved_observations={count}")
+    return 0
+
+
+def list_observations_command(args: argparse.Namespace) -> int:
+    from storage.db import connect
+    from storage.models import ObservationQuery
+    from storage.repositories import ObservationRepository
+
+    settings = load_settings()
+    setup_logging(settings)
+    trade_date = parse_date_arg(args.date) if args.date else None
+    with connect(settings) as connection:
+        observations = ObservationRepository(connection).list(
+            ObservationQuery(
+                trade_date=trade_date,
+                report_type=args.report_type,
+                status=args.status,
+                limit=args.limit,
+            )
+        )
+    if not observations:
+        print("No observations found.")
+        return 0
+    for observation in observations:
+        print(
+            f"{observation.id} | {observation.trade_date.isoformat()} | {observation.report_type} | "
+            f"{observation.priority} | {observation.status} | {observation.theme} | "
+            f"stocks={','.join(observation.related_stocks) or 'none'}"
+        )
+    return 0
+
+
+def update_observation_command(args: argparse.Namespace) -> int:
+    from storage.db import connect
+    from storage.repositories import ObservationRepository
+
+    settings = load_settings()
+    setup_logging(settings)
+    with connect(settings) as connection:
+        count = ObservationRepository(connection).update_status(args.id, args.status, outcome=args.outcome, review_note=args.review_note)
+    print(f"updated_observations={count}")
+    return 0
+
+
+def observation_from_candidate(candidate):
+    from storage.models import Observation
+    from storage.repositories import build_observation_id
+
+    return Observation(
+        id=build_observation_id(candidate.trade_date, candidate.report_type, candidate.theme, candidate.source_event_ids),
+        trade_date=candidate.trade_date,
+        report_type=candidate.report_type,
+        theme=candidate.theme,
+        related_stocks=candidate.related_stocks,
+        hypothesis=candidate.hypothesis,
+        validation_condition=candidate.validation_condition,
+        invalid_condition=candidate.invalid_condition,
+        priority=candidate.priority,
+        status=candidate.status,
+        source_event_ids=candidate.source_event_ids,
+        evidence=candidate.evidence,
+    )
+
+
 def load_documents_and_market_context(args: argparse.Namespace, active_date):
     return load_documents_and_market_context_for_filters(
         active_date,
@@ -669,6 +773,7 @@ def report_command(args: argparse.Namespace) -> int:
     settings = load_settings()
     setup_logging(settings)
     trade_date = parse_date_arg(args.date)
+    normalized_report_type = normalize_cli_report_type(args.report_type)
     documents, market_context = load_documents_and_market_context_for_filters(trade_date, limit=100)
     scored_events = []
     observations = []
@@ -676,7 +781,7 @@ def report_command(args: argparse.Namespace) -> int:
         event = extract_event(document)
         score = score_event(event, market_context)
         scored_events.append(ScoredEvent(event=event, score=score))
-        candidate = build_observation_candidate(event, score, trade_date, report_type="pre_market")
+        candidate = build_observation_candidate(event, score, trade_date, report_type=normalized_report_type)
         if candidate is not None:
             observations.append(candidate)
     try:
@@ -686,15 +791,19 @@ def report_command(args: argparse.Namespace) -> int:
 
     if args.report_type == "after-close":
         report = build_after_close_report(trade_date, market_context, scored_events, observations, stock_review_skill)
-        path = write_report(settings.report_output_dir, trade_date, "after_close", report)
+        path = write_report(settings.report_output_dir, trade_date, normalized_report_type, report)
     elif args.report_type == "noon":
         report = build_noon_report(trade_date, market_context, scored_events, observations, stock_review_skill)
-        path = write_report(settings.report_output_dir, trade_date, "noon", report)
+        path = write_report(settings.report_output_dir, trade_date, normalized_report_type, report)
     else:
         report = build_pre_market_report(trade_date, market_context, scored_events, observations, stock_review_skill)
-        path = write_report(settings.report_output_dir, trade_date, "pre_market", report)
+        path = write_report(settings.report_output_dir, trade_date, normalized_report_type, report)
     print(path)
     return 0
+
+
+def normalize_cli_report_type(report_type: str) -> str:
+    return report_type.replace("-", "_")
 
 
 def main() -> int:
@@ -740,6 +849,12 @@ def main() -> int:
         return score_events_command(args)
     if args.command == "generate-observations":
         return generate_observations_command(args)
+    if args.command == "save-observations":
+        return save_observations_command(args)
+    if args.command == "list-observations":
+        return list_observations_command(args)
+    if args.command == "update-observation":
+        return update_observation_command(args)
     if args.command == "list-skills":
         return list_skills_command()
     if args.command == "show-skill":

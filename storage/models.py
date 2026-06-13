@@ -76,3 +76,29 @@ class MarketSnapshotQuery:
     source: str | None = None
     instrument_type: str | None = None
     limit: int = 100
+
+
+@dataclass(frozen=True)
+class Observation:
+    trade_date: date
+    report_type: str
+    theme: str
+    hypothesis: str
+    validation_condition: str
+    invalid_condition: str
+    priority: str
+    id: str = field(default_factory=lambda: str(uuid4()))
+    related_stocks: list[str] = field(default_factory=list)
+    status: str = "pending"
+    outcome: str = ""
+    review_note: str = ""
+    source_event_ids: list[str] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ObservationQuery:
+    trade_date: date | None = None
+    report_type: str | None = None
+    status: str | None = None
+    limit: int = 100

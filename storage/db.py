@@ -88,6 +88,29 @@ SCHEMA_SQL = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_market_snapshots_trade_date ON market_snapshots (trade_date)",
     "CREATE INDEX IF NOT EXISTS idx_market_snapshots_code ON market_snapshots (code)",
+    """
+    CREATE TABLE IF NOT EXISTS observations (
+        id TEXT PRIMARY KEY,
+        trade_date DATE NOT NULL,
+        report_type TEXT NOT NULL,
+        theme TEXT NOT NULL,
+        related_stocks JSONB NOT NULL DEFAULT '[]'::jsonb,
+        hypothesis TEXT NOT NULL,
+        validation_condition TEXT NOT NULL,
+        invalid_condition TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        outcome TEXT NOT NULL DEFAULT '',
+        review_note TEXT NOT NULL DEFAULT '',
+        source_event_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_observations_trade_date ON observations (trade_date)",
+    "CREATE INDEX IF NOT EXISTS idx_observations_report_type ON observations (report_type)",
+    "CREATE INDEX IF NOT EXISTS idx_observations_status ON observations (status)",
 )
 
 

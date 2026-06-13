@@ -11,13 +11,18 @@ from analysis.events import EventScore, ExtractedEvent
 from analysis.market_context import MarketContext, MarketInstrumentSummary, SectorHotspot
 from analysis.observations import ObservationCandidate
 from app.config import Settings
-from app.main import report_command
+from app.main import normalize_cli_report_type, report_command
 from app.reports import ScoredEvent, build_after_close_report, build_noon_report, build_pre_market_report, write_report
 from app.skills import Skill
 from storage.models import RawDocument
 
 
 class ReportTests(unittest.TestCase):
+    def test_normalize_cli_report_type(self) -> None:
+        self.assertEqual("after_close", normalize_cli_report_type("after-close"))
+        self.assertEqual("pre_market", normalize_cli_report_type("pre-market"))
+        self.assertEqual("noon", normalize_cli_report_type("noon"))
+
     def test_build_after_close_report_renders_required_sections(self) -> None:
         trade_date = date(2026, 6, 12)
         market_context = MarketContext(
@@ -104,6 +109,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("## 风险清单", report)
         self.assertIn("Observation 入库和回填尚未接入", report)
         self.assertIn("核心票锚点：000001 平安银行", report)
+        assert_no_unconditional_trade_instruction(self, report)
 
     def test_build_noon_report_renders_required_sections(self) -> None:
         trade_date = date(2026, 6, 12)
@@ -213,6 +219,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("## 重要公告和新闻", report)
         self.assertIn("某股东拟减持公司股份", report)
         self.assertIn("Observation 入库和盘前观察项读取尚未接入", report)
+        assert_no_unconditional_trade_instruction(self, report)
 
     def test_build_pre_market_report_renders_required_sections(self) -> None:
         trade_date = date(2026, 6, 12)
@@ -328,6 +335,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("开盘验证条件", report)
         self.assertIn("失效条件", report)
         self.assertIn("missing_index_snapshots", report)
+        assert_no_unconditional_trade_instruction(self, report)
 
     def test_write_report_uses_documented_filename(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -504,6 +512,11 @@ class ReportTests(unittest.TestCase):
             content = report_path.read_text(encoding="utf-8")
             self.assertIn("午间复盘报告", content)
             self.assertIn("## 下午机会", content)
+
+
+def assert_no_unconditional_trade_instruction(test_case: unittest.TestCase, report: str) -> None:
+    for keyword in ("买入", "卖出", "建仓", "清仓"):
+        test_case.assertNotIn(keyword, report)
 
 
 if __name__ == "__main__":

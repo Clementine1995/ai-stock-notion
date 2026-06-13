@@ -9,6 +9,8 @@ from storage.models import (
     DocumentChunkQuery,
     MarketSnapshot,
     MarketSnapshotQuery,
+    Observation,
+    ObservationQuery,
     RawDocument,
     RawDocumentQuery,
 )
@@ -22,6 +24,11 @@ def build_content_hash(source: str, title: str, publish_time: datetime | None, s
 
 def build_chunk_hash(raw_document_id: str, chunk_index: int, content: str) -> str:
     raw_value = "|".join((raw_document_id, str(chunk_index), content))
+    return sha256(raw_value.encode("utf-8")).hexdigest()
+
+
+def build_observation_id(trade_date: object, report_type: str, theme: str, source_event_ids: list[str]) -> str:
+    raw_value = "|".join((str(trade_date), report_type.strip(), theme.strip(), ",".join(sorted(source_event_ids))))
     return sha256(raw_value.encode("utf-8")).hexdigest()
 
 
@@ -398,3 +405,177 @@ class MarketSnapshotRepository:
             )
             for row in rows
         ]
+
+
+class ObservationRepository:
+    def __init__(self, connection: Any) -> None:
+        self.connection = connection
+
+    def upsert(self, observation: Observation) -> Observation:
+        from psycopg.types.json import Jsonb
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO observations (
+                    id, trade_date, report_type, theme, related_stocks, hypothesis,
+                    validation_condition, invalid_condition, priority, status,
+                    outcome, review_note, source_event_ids, evidence
+                )
+                VALUES (
+                    %(id)s, %(trade_date)s, %(report_type)s, %(theme)s, %(related_stocks)s,
+                    %(hypothesis)s, %(validation_condition)s, %(invalid_condition)s,
+                    %(priority)s, %(status)s, %(outcome)s, %(review_note)s,
+                    %(source_event_ids)s, %(evidence)s
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    trade_date = EXCLUDED.trade_date,
+                    report_type = EXCLUDED.report_type,
+                    theme = EXCLUDED.theme,
+                    related_stocks = EXCLUDED.related_stocks,
+                    hypothesis = EXCLUDED.hypothesis,
+                    validation_condition = EXCLUDED.validation_condition,
+                    invalid_condition = EXCLUDED.invalid_condition,
+                    priority = EXCLUDED.priority,
+                    status = EXCLUDED.status,
+                    outcome = EXCLUDED.outcome,
+                    review_note = EXCLUDED.review_note,
+                    source_event_ids = EXCLUDED.source_event_ids,
+                    evidence = EXCLUDED.evidence,
+                    updated_at = NOW()
+                """,
+                observation_params(observation, Jsonb),
+            )
+        self.connection.commit()
+        return observation
+
+    def upsert_many(self, observations: list[Observation]) -> int:
+        from psycopg.types.json import Jsonb
+
+        with self.connection.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO observations (
+                    id, trade_date, report_type, theme, related_stocks, hypothesis,
+                    validation_condition, invalid_condition, priority, status,
+                    outcome, review_note, source_event_ids, evidence
+                )
+                VALUES (
+                    %(id)s, %(trade_date)s, %(report_type)s, %(theme)s, %(related_stocks)s,
+                    %(hypothesis)s, %(validation_condition)s, %(invalid_condition)s,
+                    %(priority)s, %(status)s, %(outcome)s, %(review_note)s,
+                    %(source_event_ids)s, %(evidence)s
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    trade_date = EXCLUDED.trade_date,
+                    report_type = EXCLUDED.report_type,
+                    theme = EXCLUDED.theme,
+                    related_stocks = EXCLUDED.related_stocks,
+                    hypothesis = EXCLUDED.hypothesis,
+                    validation_condition = EXCLUDED.validation_condition,
+                    invalid_condition = EXCLUDED.invalid_condition,
+                    priority = EXCLUDED.priority,
+                    status = EXCLUDED.status,
+                    outcome = EXCLUDED.outcome,
+                    review_note = EXCLUDED.review_note,
+                    source_event_ids = EXCLUDED.source_event_ids,
+                    evidence = EXCLUDED.evidence,
+                    updated_at = NOW()
+                """,
+                [observation_params(observation, Jsonb) for observation in observations],
+            )
+        self.connection.commit()
+        return len(observations)
+
+    def list(self, query: ObservationQuery | None = None) -> list[Observation]:
+        active_query = query or ObservationQuery()
+        where: list[str] = []
+        params: dict[str, object] = {"limit": active_query.limit}
+
+        if active_query.trade_date is not None:
+            where.append("trade_date = %(trade_date)s")
+            params["trade_date"] = active_query.trade_date
+        if active_query.report_type is not None:
+            where.append("report_type = %(report_type)s")
+            params["report_type"] = active_query.report_type
+        if active_query.status is not None:
+            where.append("status = %(status)s")
+            params["status"] = active_query.status
+
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT id, trade_date, report_type, theme, related_stocks, hypothesis,
+                       validation_condition, invalid_condition, priority, status,
+                       outcome, review_note, source_event_ids, evidence
+                FROM observations
+                {where_sql}
+                ORDER BY trade_date DESC, priority, theme
+                LIMIT %(limit)s
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+
+        return [observation_from_row(row) for row in rows]
+
+    def update_status(self, observation_id: str, status: str, outcome: str = "", review_note: str = "") -> int:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE observations
+                SET status = %(status)s,
+                    outcome = %(outcome)s,
+                    review_note = %(review_note)s,
+                    updated_at = NOW()
+                WHERE id = %(id)s
+                """,
+                {
+                    "id": observation_id,
+                    "status": status,
+                    "outcome": outcome,
+                    "review_note": review_note,
+                },
+            )
+            rowcount = cursor.rowcount
+        self.connection.commit()
+        return rowcount
+
+
+def observation_params(observation: Observation, jsonb_factory: Any) -> dict[str, object]:
+    return {
+        "id": observation.id,
+        "trade_date": observation.trade_date,
+        "report_type": observation.report_type,
+        "theme": observation.theme,
+        "related_stocks": jsonb_factory(observation.related_stocks),
+        "hypothesis": observation.hypothesis,
+        "validation_condition": observation.validation_condition,
+        "invalid_condition": observation.invalid_condition,
+        "priority": observation.priority,
+        "status": observation.status,
+        "outcome": observation.outcome,
+        "review_note": observation.review_note,
+        "source_event_ids": jsonb_factory(observation.source_event_ids),
+        "evidence": jsonb_factory(observation.evidence),
+    }
+
+
+def observation_from_row(row) -> Observation:
+    return Observation(
+        id=row[0],
+        trade_date=row[1],
+        report_type=row[2],
+        theme=row[3],
+        related_stocks=row[4],
+        hypothesis=row[5],
+        validation_condition=row[6],
+        invalid_condition=row[7],
+        priority=row[8],
+        status=row[9],
+        outcome=row[10],
+        review_note=row[11],
+        source_event_ids=row[12],
+        evidence=row[13],
+    )
