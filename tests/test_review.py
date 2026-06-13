@@ -89,6 +89,23 @@ class ReviewSuggestionTests(unittest.TestCase):
         self.assertEqual("pending", suggestion.status)
         self.assertEqual(["related_stock_snapshot_missing"], suggestion.rationale)
 
+    def test_suggests_stale_pending_for_old_observation(self) -> None:
+        observation = Observation(
+            trade_date=date(2026, 6, 1),
+            report_type="pre_market",
+            theme="AI",
+            related_stocks=["000001"],
+            hypothesis="观察 AI 是否加强。",
+            validation_condition="核心票走强。",
+            invalid_condition="核心票走弱。",
+            priority="A",
+        )
+
+        suggestion = suggest_observation_status(observation, build_market_context([], date(2026, 6, 13)), review_date=date(2026, 6, 13))
+
+        self.assertEqual("stale_pending", suggestion.status)
+        self.assertIn("age_days=12", suggestion.rationale)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -192,9 +192,20 @@ Observation 是可验证的复盘假设卡片，不是新闻库。它只保存 A
 .\.venv\Scripts\python -m app.main save-observations --date 2026-06-12 --report-type pre_market
 .\.venv\Scripts\python -m app.main list-observations --date 2026-06-12 --status pending
 .\.venv\Scripts\python -m app.main review --date 2026-06-12
+.\.venv\Scripts\python -m app.main review --date 2026-06-12 --suggestion miss_candidate
 .\.venv\Scripts\python -m app.main review --date 2026-06-12 --id <observation_id> --status hit --outcome "成立" --review-note "板块放量，核心票未回落"
 ```
 
 午间和盘后报告会优先读取当天已保存的 pending Observation。如果还没有保存观察项，则回退到本次报告临时生成的候选项。
 
-`review --date` 会基于当天行情给出 `hit_candidate`、`miss_candidate` 或 `pending` 的初步建议，但不会自动改写 Observation 状态。最终状态仍需使用 `review --id ... --status hit|miss|invalid` 人工确认。
+`review --date` 会基于当天行情给出 `hit_candidate`、`miss_candidate`、`stale_pending` 或 `pending` 的初步建议，但不会自动改写 Observation 状态。最终状态仍需使用 `review --id ... --status hit|miss|invalid` 人工确认。`--suggestion` 可以只筛选某类建议，方便批量复盘。
+
+周度复盘可以汇总一段日期内的 Observation 命中、误判、失效和待复盘情况：
+
+```bash
+.\.venv\Scripts\python -m app.main weekly-review --start-date 2026-06-08 --end-date 2026-06-13
+```
+
+输出文件为 `reports/output/YYYY-MM-DD_weekly.md` 和 `reports/output/YYYY-MM-DD_experience_candidates.md`，其中结束日期用于文件名。
+
+周度复盘会列出命中、误判、失效、待复盘和陈旧观察项，并生成“可沉淀条目”。经验沉淀候选文件会把已复盘样本整理成 Notion 经验候选，并在同主题多次命中或误判后提示可能的 `stock-review` Skill 更新候选；它不会自动写 Notion，也不会自动改写 Skill。

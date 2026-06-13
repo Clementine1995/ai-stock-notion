@@ -53,7 +53,7 @@ class ReviewCliTests(unittest.TestCase):
         FakeObservationRepository.listed = [
             Observation(
                 id="obs-1",
-                trade_date=date(2026, 6, 13),
+                trade_date=date(2026, 6, 8),
                 report_type="pre_market",
                 theme="AI",
                 related_stocks=["000001"],
@@ -73,7 +73,7 @@ class ReviewCliTests(unittest.TestCase):
                 metadata={"instrument_type": "stock", "sector": "AI"},
             )
         ]
-        args = Namespace(date="2026-06-13", id="", status=None, outcome="", review_note="", limit=20)
+        args = Namespace(date="2026-06-13", id="", status=None, outcome="", review_note="", limit=20, suggestion=None)
 
         with patch("app.main.load_settings", return_value=Settings()), patch("app.main.setup_logging"), patch(
             "storage.db.connect",
@@ -91,10 +91,10 @@ class ReviewCliTests(unittest.TestCase):
         printed = "\n".join(str(call.args[0]) for call in print_mock.call_args_list)
         self.assertIn("obs-1", printed)
         self.assertIn("hypothesis=观察 AI 是否继续加强。", printed)
-        self.assertIn("suggestion=hit_candidate", printed)
+        self.assertIn("suggestion=stale_pending", printed)
 
     def test_review_updates_observation_when_id_is_provided(self) -> None:
-        args = Namespace(date="2026-06-13", id="obs-1", status="hit", outcome="成立", review_note="板块放量", limit=20)
+        args = Namespace(date="2026-06-13", id="obs-1", status="hit", outcome="成立", review_note="板块放量", limit=20, suggestion=None)
 
         with patch("app.main.load_settings", return_value=Settings()), patch("app.main.setup_logging"), patch(
             "storage.db.connect",
@@ -107,7 +107,7 @@ class ReviewCliTests(unittest.TestCase):
         print_mock.assert_called_with("updated_observations=1")
 
     def test_review_requires_status_when_id_is_provided(self) -> None:
-        args = Namespace(date="2026-06-13", id="obs-1", status=None, outcome="", review_note="", limit=20)
+        args = Namespace(date="2026-06-13", id="obs-1", status=None, outcome="", review_note="", limit=20, suggestion=None)
 
         with patch("app.main.load_settings", return_value=Settings()), patch("app.main.setup_logging"), patch(
             "storage.db.connect",
@@ -115,6 +115,65 @@ class ReviewCliTests(unittest.TestCase):
         ), patch("storage.repositories.ObservationRepository", FakeObservationRepository):
             with self.assertRaises(ValueError):
                 review_command(args)
+
+    def test_review_filters_by_suggestion(self) -> None:
+        FakeObservationRepository.listed = [
+            Observation(
+                id="obs-1",
+                trade_date=date(2026, 6, 13),
+                report_type="pre_market",
+                theme="AI",
+                related_stocks=["000001"],
+                hypothesis="观察 AI 是否继续加强。",
+                validation_condition="板块放量。",
+                invalid_condition="板块无跟随。",
+                priority="A",
+            ),
+            Observation(
+                id="obs-2",
+                trade_date=date(2026, 6, 13),
+                report_type="pre_market",
+                theme="地产",
+                related_stocks=["000002"],
+                hypothesis="观察地产是否修复。",
+                validation_condition="板块放量。",
+                invalid_condition="板块无跟随。",
+                priority="B",
+            ),
+        ]
+        FakeMarketSnapshotRepository.listed = [
+            MarketSnapshot(
+                trade_date=date(2026, 6, 13),
+                code="000001",
+                name="核心票",
+                pct_chg=4.2,
+                amount=1_000_000_000,
+                metadata={"instrument_type": "stock", "sector": "AI"},
+            ),
+            MarketSnapshot(
+                trade_date=date(2026, 6, 13),
+                code="000002",
+                name="弱势票",
+                pct_chg=-3.2,
+                amount=1_000_000_000,
+                metadata={"instrument_type": "stock", "sector": "地产"},
+            ),
+        ]
+        args = Namespace(date="2026-06-13", id="", status=None, outcome="", review_note="", limit=20, suggestion="miss_candidate")
+
+        with patch("app.main.load_settings", return_value=Settings()), patch("app.main.setup_logging"), patch(
+            "storage.db.connect",
+            fake_connect,
+        ), patch("storage.repositories.ObservationRepository", FakeObservationRepository), patch(
+            "storage.repositories.MarketSnapshotRepository",
+            FakeMarketSnapshotRepository,
+        ), patch("builtins.print") as print_mock:
+            exit_code = review_command(args)
+
+        self.assertEqual(0, exit_code)
+        printed = "\n".join(str(call.args[0]) for call in print_mock.call_args_list)
+        self.assertNotIn("obs-1", printed)
+        self.assertIn("obs-2", printed)
 
 
 if __name__ == "__main__":

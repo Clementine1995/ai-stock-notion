@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, timedelta
 from collections.abc import Iterator
 
 from app.config import load_settings, redact_url
@@ -130,6 +130,17 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--outcome", default="", help="实际结果")
     review_parser.add_argument("--review-note", default="", help="复盘结论")
     review_parser.add_argument("--limit", type=int, default=20, help="未提供 ID 时返回 pending 观察项条数")
+    review_parser.add_argument(
+        "--suggestion",
+        default=None,
+        choices=("hit_candidate", "miss_candidate", "stale_pending", "pending"),
+        help="只显示指定复盘建议的观察项",
+    )
+
+    weekly_review_parser = subparsers.add_parser("weekly-review", help="生成周度复盘 Markdown")
+    weekly_review_parser.add_argument("--start-date", default=None, help="开始日期，格式 YYYY-MM-DD；默认结束日前 6 天")
+    weekly_review_parser.add_argument("--end-date", default=date.today().isoformat(), help="结束日期，格式 YYYY-MM-DD")
+    weekly_review_parser.add_argument("--limit", type=int, default=500, help="读取观察项数量")
 
     subparsers.add_parser("show-config", help="显示当前配置概览")
     return parser
@@ -658,7 +669,9 @@ def review_command(args: argparse.Namespace) -> int:
         return 0
     market_context = build_market_context(snapshots, trade_date)
     for observation in observations:
-        suggestion = suggest_observation_status(observation, market_context)
+        suggestion = suggest_observation_status(observation, market_context, review_date=trade_date)
+        if args.suggestion is not None and suggestion.status != args.suggestion:
+            continue
         print(
             f"{observation.id} | {observation.trade_date.isoformat()} | {observation.report_type} | "
             f"{observation.priority} | {observation.theme} | stocks={','.join(observation.related_stocks) or 'none'}"
@@ -667,6 +680,39 @@ def review_command(args: argparse.Namespace) -> int:
         print(f"  validation={observation.validation_condition}")
         print(f"  invalid={observation.invalid_condition}")
         print(f"  suggestion={suggestion.status} | rationale={'; '.join(suggestion.rationale)}")
+    return 0
+
+
+def weekly_review_command(args: argparse.Namespace) -> int:
+    from datetime import datetime
+
+    from analysis.weekly import WeeklyReviewSummary, build_experience_candidates, build_weekly_review
+    from app.reports import write_report
+    from storage.db import connect
+    from storage.models import ObservationQuery
+    from storage.repositories import ObservationRepository
+
+    settings = load_settings()
+    setup_logging(settings)
+    end_date = parse_date_arg(args.end_date)
+    start_date = parse_date_arg(args.start_date) if args.start_date else end_date - timedelta(days=6)
+    with connect(settings) as connection:
+        observations = ObservationRepository(connection).list(
+            ObservationQuery(start_date=start_date, end_date=end_date, limit=args.limit)
+        )
+    generated_at = datetime.now()
+    summary = WeeklyReviewSummary(
+        start_date=start_date,
+        end_date=end_date,
+        observations=observations,
+        generated_at=generated_at,
+    )
+    report = build_weekly_review(summary)
+    experience_candidates = build_experience_candidates(summary)
+    path = write_report(settings.report_output_dir, end_date, "weekly", report)
+    experience_path = write_report(settings.report_output_dir, end_date, "experience_candidates", experience_candidates)
+    print(path)
+    print(experience_path)
     return 0
 
 
@@ -936,6 +982,8 @@ def main() -> int:
         return update_observation_command(args)
     if args.command == "review":
         return review_command(args)
+    if args.command == "weekly-review":
+        return weekly_review_command(args)
     if args.command == "list-skills":
         return list_skills_command()
     if args.command == "show-skill":

@@ -492,6 +492,12 @@ class ObservationRepository:
         where: list[str] = []
         params: dict[str, object] = {"limit": active_query.limit}
 
+        if active_query.start_date is not None:
+            where.append("trade_date >= %(start_date)s")
+            params["start_date"] = active_query.start_date
+        if active_query.end_date is not None:
+            where.append("trade_date <= %(end_date)s")
+            params["end_date"] = active_query.end_date
         if active_query.trade_date is not None:
             where.append("trade_date = %(trade_date)s")
             params["trade_date"] = active_query.trade_date

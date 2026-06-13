@@ -191,6 +191,19 @@ class StorageModelTests(unittest.TestCase):
         self.assertIn("status = %(status)s", connection.last_cursor.sql)
         self.assertEqual("pending", connection.last_cursor.params["status"])
 
+    def test_observation_list_filters_by_date_range(self) -> None:
+        connection = FakeConnection()
+        start_date = datetime(2026, 6, 8, tzinfo=UTC).date()
+        end_date = datetime(2026, 6, 13, tzinfo=UTC).date()
+
+        observations = ObservationRepository(connection).list(ObservationQuery(start_date=start_date, end_date=end_date))
+
+        self.assertEqual([], observations)
+        self.assertIn("trade_date >= %(start_date)s", connection.last_cursor.sql)
+        self.assertIn("trade_date <= %(end_date)s", connection.last_cursor.sql)
+        self.assertEqual(start_date, connection.last_cursor.params["start_date"])
+        self.assertEqual(end_date, connection.last_cursor.params["end_date"])
+
     def test_observation_update_status(self) -> None:
         connection = FakeConnection()
 

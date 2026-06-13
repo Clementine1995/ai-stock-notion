@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from analysis.market_context import MarketContext, MarketInstrumentSummary
 from storage.models import Observation
@@ -12,7 +13,20 @@ class ReviewSuggestion:
     rationale: list[str]
 
 
-def suggest_observation_status(observation: Observation, market_context: MarketContext) -> ReviewSuggestion:
+STALE_PENDING_DAYS = 5
+
+
+def suggest_observation_status(
+    observation: Observation,
+    market_context: MarketContext,
+    review_date: date | None = None,
+    stale_days: int = STALE_PENDING_DAYS,
+) -> ReviewSuggestion:
+    active_review_date = review_date or market_context.trade_date
+    age_days = (active_review_date - observation.trade_date).days
+    if observation.status == "pending" and age_days >= stale_days:
+        return ReviewSuggestion(status="stale_pending", rationale=[f"age_days={age_days}", f"stale_days={stale_days}"])
+
     stock_summaries = find_related_stock_summaries(observation, market_context)
     sector_hotspot = next((item for item in market_context.sector_hotspots if item.sector == observation.theme), None)
 

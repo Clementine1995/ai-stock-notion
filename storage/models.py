@@ -98,6 +98,8 @@ class Observation:
 
 @dataclass(frozen=True)
 class ObservationQuery:
+    start_date: date | None = None
+    end_date: date | None = None
     trade_date: date | None = None
     report_type: str | None = None
     status: str | None = None
