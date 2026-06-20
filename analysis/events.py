@@ -117,6 +117,9 @@ def score_event(event: ExtractedEvent, market_context: MarketContext | None = No
     expectation_gap_score = expectation_score_for(event, sector_spread_score, liquidity_score)
     rationale = build_score_rationale(event, market_context, sector_spread_score, liquidity_score)
     priority = classify_priority(catalyst_score, expectation_gap_score, risk_score, event.confidence)
+    if not has_tradeable_anchor(event):
+        priority = "C"
+        rationale.append("no_tradeable_anchor")
     return EventScore(
         catalyst_score=catalyst_score,
         freshness_score=freshness_score,
@@ -127,6 +130,10 @@ def score_event(event: ExtractedEvent, market_context: MarketContext | None = No
         priority=priority,
         rationale=rationale,
     )
+
+
+def has_tradeable_anchor(event: ExtractedEvent) -> bool:
+    return bool(event.affected_stocks or event.affected_sectors)
 
 
 def classify_event_type(document: RawDocument, text: str) -> str:

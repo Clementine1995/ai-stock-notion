@@ -36,6 +36,14 @@ class EventAnalysisTests(unittest.TestCase):
 
         self.assertEqual({"金融": ["银行"]}, sectors)
 
+    def test_default_sector_keywords_cover_common_hot_themes(self) -> None:
+        sectors = load_sector_keywords()
+
+        self.assertIn("低空经济", sectors)
+        self.assertIn("飞行汽车", sectors["低空经济"])
+        self.assertIn("机器人", sectors)
+        self.assertIn("人形机器人", sectors["机器人"])
+
     def test_extract_event_from_announcement_maps_type_stock_and_sector(self) -> None:
         document = RawDocument(
             id="doc-1",
@@ -118,6 +126,24 @@ class EventAnalysisTests(unittest.TestCase):
         self.assertEqual("negative", event.impact_direction)
         self.assertEqual(5, score.risk_score)
         self.assertEqual("C", score.priority)
+
+    def test_event_without_tradeable_anchor_is_downgraded(self) -> None:
+        document = RawDocument(
+            id="doc-1",
+            source="akshare_cctv",
+            doc_type="news",
+            title="泛政策新闻",
+            content="国务院相关会议消息",
+            content_hash="hash",
+        )
+        event = extract_event(document, {})
+
+        score = score_event(event)
+
+        self.assertEqual([], event.affected_stocks)
+        self.assertEqual([], event.affected_sectors)
+        self.assertEqual("C", score.priority)
+        self.assertIn("no_tradeable_anchor", score.rationale)
 
 
 if __name__ == "__main__":

@@ -160,6 +160,17 @@ class WeeklyReviewTests(unittest.TestCase):
                 status="miss",
                 review_note="板块无跟随",
             ),
+            Observation(
+                trade_date=date(2026, 6, 13),
+                report_type="pre_market",
+                theme="泛政策新闻",
+                hypothesis="缺少交易锚点。",
+                validation_condition="放量。",
+                invalid_condition="无跟随。",
+                priority="B",
+                status="invalid",
+                review_note="未映射到明确热点板块/标的，暂不沉淀",
+            ),
         ]
 
         content = build_experience_candidates(
@@ -174,6 +185,7 @@ class WeeklyReviewTests(unittest.TestCase):
         self.assertIn("## Notion 经验候选", content)
         self.assertIn("### 有效样本 | AI | 2026-06-10", content)
         self.assertIn("### 误判样本 | 地产 | 2026-06-12", content)
+        self.assertNotIn("泛政策新闻", content)
         self.assertIn("## stock-review Skill 候选", content)
         self.assertIn("AI 连续命中 2 次", content)
         self.assertIn("提升 `skills/stock-review/SKILL.md` version", content)

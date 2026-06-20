@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
 
-from analysis.events import EventScore, ExtractedEvent
+from analysis.events import EventScore, ExtractedEvent, has_tradeable_anchor
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,10 @@ def build_observation_candidate(
 ) -> ObservationCandidate | None:
     if score.priority == "C":
         return None
+    if not has_tradeable_anchor(event):
+        return None
+    if not has_actionable_catalyst(event):
+        return None
     theme = resolve_theme(event)
     return ObservationCandidate(
         trade_date=trade_date,
@@ -49,6 +53,34 @@ def build_observation_candidate(
         source_event_ids=[event.raw_document_id],
         evidence=[*event.evidence, *score.rationale],
     )
+
+
+def has_actionable_catalyst(event: ExtractedEvent) -> bool:
+    if event.affected_stocks or event.event_type != "policy_catalyst":
+        return True
+    return contains_any(
+        event.title,
+        (
+            "政策",
+            "规划",
+            "方案",
+            "意见",
+            "通知",
+            "措施",
+            "支持",
+            "补贴",
+            "试点",
+            "建设",
+            "产业",
+            "商业航天",
+            "低空经济",
+            "车路云",
+        ),
+    )
+
+
+def contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in text for keyword in keywords)
 
 
 def resolve_theme(event: ExtractedEvent) -> str:

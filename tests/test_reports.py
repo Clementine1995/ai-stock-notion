@@ -337,6 +337,65 @@ class ReportTests(unittest.TestCase):
         self.assertIn("missing_index_snapshots", report)
         assert_no_unconditional_trade_instruction(self, report)
 
+    def test_pre_market_report_separates_background_weak_catalyst(self) -> None:
+        trade_date = date(2026, 6, 12)
+        market_context = MarketContext(
+            trade_date=trade_date,
+            snapshot_count=2,
+            stock_count=1,
+            index_count=1,
+            observed_total_amount=620_000_000_000,
+            amount_tier="below_1t_watch_small_caps_or_shrinking_liquidity",
+            indexes=[],
+            strong_stocks=[],
+            weak_stocks=[],
+            volume_leaders=[],
+            sector_hotspots=[],
+            market_style="unknown",
+            sentiment_cycle="unknown",
+            evidence_gaps=["missing_sector_mapping"],
+        )
+        scored_events = [
+            ScoredEvent(
+                event=ExtractedEvent(
+                    raw_document_id="doc-weak",
+                    source="akshare_cctv",
+                    doc_type="news",
+                    title="神舟十八号航天员乘组圆满完成第一次出舱活动",
+                    event_type="policy_catalyst",
+                    impact_direction="positive",
+                    affected_stocks=[],
+                    affected_sectors=["商业航天"],
+                    evidence=["title:神舟十八号航天员乘组圆满完成第一次出舱活动", "sectors:商业航天"],
+                    confidence=0.8,
+                ),
+                score=EventScore(
+                    catalyst_score=4,
+                    freshness_score=3,
+                    expectation_gap_score=3,
+                    sector_spread_score=2,
+                    liquidity_score=2,
+                    risk_score=2,
+                    priority="B",
+                    rationale=["event_type=policy_catalyst"],
+                ),
+            )
+        ]
+
+        report = build_pre_market_report(
+            trade_date,
+            market_context,
+            scored_events,
+            observations=[],
+            generated_at=datetime(2026, 6, 12, 8, 15, 0),
+        )
+
+        self.assertIn("## 背景弱催化", report)
+        self.assertIn("仅作情绪背景，不提升为观察项", report)
+        self.assertIn("暂无 A/B 级催化", report)
+        self.assertIn("暂无候选观察项", report)
+        assert_no_unconditional_trade_instruction(self, report)
+
     def test_write_report_uses_documented_filename(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = write_report(temp_dir, date(2026, 6, 12), "pre_market", "# report\n")

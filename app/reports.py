@@ -6,7 +6,7 @@ from pathlib import Path
 
 from analysis.events import EventScore, ExtractedEvent
 from analysis.market_context import MarketContext
-from analysis.observations import ObservationCandidate
+from analysis.observations import ObservationCandidate, has_actionable_catalyst, has_tradeable_anchor
 from app.skills import Skill
 
 
@@ -57,12 +57,20 @@ def build_pre_market_report(
             lines.append(format_news_summary(item))
 
     lines.extend(["", "## 价值投机线索"])
-    material_events = [item for item in sorted_events if item.score.priority in {"A", "B"}]
+    material_events = [item for item in sorted_events if is_material_event(item)]
     if not material_events:
         lines.append("- 暂无 A/B 级催化，先把盘前重心放在量能、板块跟随和核心票强弱确认上。")
     else:
         for item in material_events[:6]:
             lines.extend(format_event_block(item))
+
+    lines.extend(["", "## 背景弱催化"])
+    background_events = [item for item in sorted_events if is_background_weak_catalyst(item)]
+    if not background_events:
+        lines.append("- 暂无需要单独标注的弱情绪背景。")
+    else:
+        for item in background_events[:5]:
+            lines.append(format_background_weak_catalyst(item))
 
     lines.extend(["", "## 重点观察项"])
     if not observations:
@@ -273,6 +281,14 @@ def sort_observations(observations: list[ObservationCandidate]) -> list[Observat
     return sorted(observations, key=lambda item: (priority_order.get(item.priority, 9), item.theme))
 
 
+def is_material_event(item: ScoredEvent) -> bool:
+    return item.score.priority in {"A", "B"} and has_tradeable_anchor(item.event) and has_actionable_catalyst(item.event)
+
+
+def is_background_weak_catalyst(item: ScoredEvent) -> bool:
+    return item.score.priority in {"A", "B"} and has_tradeable_anchor(item.event) and not has_actionable_catalyst(item.event)
+
+
 def format_event_block(item: ScoredEvent) -> list[str]:
     event = item.event
     score = item.score
@@ -296,6 +312,12 @@ def format_news_summary(item: ScoredEvent) -> str:
         f"- [{score.priority}] {event.title}：{event.event_type} / {event.impact_direction} / "
         f"相关对象 {related} / 催化 {score.catalyst_score} / 预期差 {score.expectation_gap_score} / 风险 {score.risk_score}"
     )
+
+
+def format_background_weak_catalyst(item: ScoredEvent) -> str:
+    event = item.event
+    related = "、".join(event.affected_sectors) or "未识别"
+    return f"- [{item.score.priority}] {event.title}：映射到 {related}，但缺少明确产业政策、订单、上市公司或资金投入证据，仅作情绪背景，不提升为观察项。"
 
 
 def describe_speculation_value(item: ScoredEvent) -> str:

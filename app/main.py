@@ -104,6 +104,19 @@ def build_parser() -> argparse.ArgumentParser:
     list_observations_parser.add_argument("--status", default=None, choices=("pending", "hit", "miss", "invalid"), help="观察项状态")
     list_observations_parser.add_argument("--limit", type=int, default=20, help="返回条数")
 
+    duplicate_observations_parser = subparsers.add_parser("list-duplicate-observations", help="列出疑似重复观察项")
+    duplicate_observations_parser.add_argument("--date", default=None, help="交易日期，格式 YYYY-MM-DD")
+    duplicate_observations_parser.add_argument("--status", default=None, choices=("pending", "hit", "miss", "invalid"), help="观察项状态")
+    duplicate_observations_parser.add_argument("--limit", type=int, default=200, help="读取观察项数量")
+
+    resolve_duplicates_parser = subparsers.add_parser("resolve-duplicate-observations", help="将同组重复观察项中未保留的项标记为 invalid")
+    resolve_duplicates_parser.add_argument("--date", default=None, help="交易日期，格式 YYYY-MM-DD")
+    resolve_duplicates_parser.add_argument("--status", default="pending", choices=("pending", "hit", "miss", "invalid"), help="查找重复项时使用的状态")
+    resolve_duplicates_parser.add_argument("--limit", type=int, default=200, help="读取观察项数量")
+    resolve_duplicates_parser.add_argument("--keep-id", required=True, help="同组重复项中要保留的观察项 ID")
+    resolve_duplicates_parser.add_argument("--review-note", default="历史重复观察项，已由去重命令标记为 invalid。", help="写入未保留观察项的复盘备注")
+    resolve_duplicates_parser.add_argument("--apply", action="store_true", help="实际更新数据库；不提供时只预览")
+
     update_observation_parser = subparsers.add_parser("update-observation", help="回填观察项状态")
     update_observation_parser.add_argument("id", help="观察项 ID")
     update_observation_parser.add_argument("--status", required=True, choices=("pending", "hit", "miss", "invalid"), help="观察项状态")
@@ -565,35 +578,18 @@ def score_events_command(args: argparse.Namespace) -> int:
 def generate_observations_command(args: argparse.Namespace) -> int:
     import json
 
-    from analysis.events import extract_event, score_event
-    from analysis.observations import build_observation_candidate
-
     active_date = parse_date_arg(args.date)
-    documents, market_context = load_documents_and_market_context(args, active_date)
-    for document in documents:
-        event = extract_event(document)
-        score = score_event(event, market_context)
-        candidate = build_observation_candidate(event, score, active_date, report_type=args.report_type)
-        if candidate is not None:
-            print(json.dumps(candidate.to_dict(), ensure_ascii=False))
+    for candidate in build_observation_candidates_for_args(args, active_date):
+        print(json.dumps(candidate.to_dict(), ensure_ascii=False))
     return 0
 
 
 def save_observations_command(args: argparse.Namespace) -> int:
-    from analysis.events import extract_event, score_event
-    from analysis.observations import build_observation_candidate
     from storage.db import connect
     from storage.repositories import ObservationRepository
 
     active_date = parse_date_arg(args.date)
-    documents, market_context = load_documents_and_market_context(args, active_date)
-    observations = []
-    for document in documents:
-        event = extract_event(document)
-        score = score_event(event, market_context)
-        candidate = build_observation_candidate(event, score, active_date, report_type=args.report_type)
-        if candidate is not None:
-            observations.append(observation_from_candidate(candidate))
+    observations = [observation_from_candidate(candidate) for candidate in build_observation_candidates_for_args(args, active_date)]
 
     settings = load_settings()
     setup_logging(settings)
@@ -601,6 +597,21 @@ def save_observations_command(args: argparse.Namespace) -> int:
         count = ObservationRepository(connection).upsert_many(observations)
     print(f"saved_observations={count}")
     return 0
+
+
+def build_observation_candidates_for_args(args: argparse.Namespace, active_date):
+    from analysis.events import extract_event, score_event
+    from analysis.observations import build_observation_candidate
+
+    documents, market_context = load_documents_and_market_context(args, active_date)
+    candidates = []
+    for document in documents:
+        event = extract_event(document)
+        score = score_event(event, market_context)
+        candidate = build_observation_candidate(event, score, active_date, report_type=args.report_type)
+        if candidate is not None:
+            candidates.append(candidate)
+    return merge_observation_candidates(candidates)
 
 
 def list_observations_command(args: argparse.Namespace) -> int:
@@ -629,6 +640,59 @@ def list_observations_command(args: argparse.Namespace) -> int:
             f"{observation.priority} | {observation.status} | {observation.theme} | "
             f"stocks={','.join(observation.related_stocks) or 'none'}"
         )
+    return 0
+
+
+def list_duplicate_observations_command(args: argparse.Namespace) -> int:
+    from storage.db import connect
+    from storage.models import ObservationQuery
+    from storage.repositories import ObservationRepository
+
+    settings = load_settings()
+    setup_logging(settings)
+    trade_date = parse_date_arg(args.date) if args.date else None
+    with connect(settings) as connection:
+        observations = ObservationRepository(connection).list(ObservationQuery(trade_date=trade_date, status=args.status, limit=args.limit))
+    duplicate_groups = group_duplicate_observations(observations)
+    if not duplicate_groups:
+        print("No duplicate observations found.")
+        return 0
+    for group in duplicate_groups:
+        first = group[0]
+        print(
+            f"duplicate_group | {first.trade_date.isoformat()} | {first.report_type} | {first.priority} | "
+            f"{first.theme} | stocks={','.join(first.related_stocks) or 'none'} | count={len(group)}"
+        )
+        for observation in group:
+            print(f"  {observation.id} | status={observation.status} | outcome={observation.outcome or 'none'}")
+    return 0
+
+
+def resolve_duplicate_observations_command(args: argparse.Namespace) -> int:
+    from storage.db import connect
+    from storage.models import ObservationQuery
+    from storage.repositories import ObservationRepository
+
+    settings = load_settings()
+    setup_logging(settings)
+    trade_date = parse_date_arg(args.date) if args.date else None
+    with connect(settings) as connection:
+        repository = ObservationRepository(connection)
+        observations = repository.list(ObservationQuery(trade_date=trade_date, status=args.status, limit=args.limit))
+        keep, duplicate_ids = resolve_duplicate_observation_ids(observations, args.keep_id)
+        print(
+            f"duplicate_group | {keep.trade_date.isoformat()} | {keep.report_type} | {keep.priority} | "
+            f"{keep.theme} | stocks={','.join(keep.related_stocks) or 'none'} | keep={keep.id} | invalid_count={len(duplicate_ids)}"
+        )
+        for observation_id in duplicate_ids:
+            print(f"  invalid_candidate={observation_id}")
+        if not args.apply:
+            print("dry_run=true")
+            return 0
+        updated = 0
+        for observation_id in duplicate_ids:
+            updated += repository.update_status(observation_id, "invalid", review_note=args.review_note)
+    print(f"updated_observations={updated}")
     return 0
 
 
@@ -872,6 +936,7 @@ def report_command(args: argparse.Namespace) -> int:
         candidate = build_observation_candidate(event, score, trade_date, report_type=normalized_report_type)
         if candidate is not None:
             generated_observations.append(candidate)
+    generated_observations = merge_observation_candidates(generated_observations)
     try:
         stock_review_skill = load_skill(settings, "stock-review")
     except FileNotFoundError:
@@ -931,6 +996,77 @@ def observation_candidate_from_observation(observation):
     )
 
 
+def merge_observation_candidates(candidates):
+    from analysis.observations import ObservationCandidate
+
+    merged: dict[tuple[object, ...], ObservationCandidate] = {}
+    for candidate in candidates:
+        key = observation_candidate_dedupe_key(candidate)
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = candidate
+            continue
+        merged[key] = ObservationCandidate(
+            trade_date=existing.trade_date,
+            report_type=existing.report_type,
+            theme=existing.theme,
+            related_stocks=existing.related_stocks,
+            hypothesis=existing.hypothesis,
+            validation_condition=existing.validation_condition,
+            invalid_condition=existing.invalid_condition,
+            priority=existing.priority,
+            status=existing.status,
+            source_event_ids=merge_unique(existing.source_event_ids, candidate.source_event_ids),
+            evidence=merge_unique(existing.evidence, candidate.evidence),
+        )
+    return list(merged.values())
+
+
+def observation_candidate_dedupe_key(candidate) -> tuple[object, ...]:
+    return (
+        candidate.trade_date,
+        candidate.report_type,
+        candidate.theme,
+        tuple(candidate.related_stocks),
+        candidate.hypothesis,
+        candidate.validation_condition,
+        candidate.invalid_condition,
+        candidate.priority,
+    )
+
+
+def merge_unique(first: list[str], second: list[str]) -> list[str]:
+    return list(dict.fromkeys([*first, *second]))
+
+
+def group_duplicate_observations(observations):
+    groups: dict[tuple[object, ...], list[object]] = {}
+    for observation in observations:
+        groups.setdefault(observation_dedupe_key(observation), []).append(observation)
+    return [group for group in groups.values() if len(group) > 1]
+
+
+def resolve_duplicate_observation_ids(observations, keep_id: str):
+    for group in group_duplicate_observations(observations):
+        for observation in group:
+            if observation.id == keep_id:
+                return observation, [item.id for item in group if item.id != keep_id]
+    raise ValueError(f"keep-id is not part of a duplicate observation group: {keep_id}")
+
+
+def observation_dedupe_key(observation) -> tuple[object, ...]:
+    return (
+        observation.trade_date,
+        observation.report_type,
+        observation.theme,
+        tuple(observation.related_stocks),
+        observation.hypothesis,
+        observation.validation_condition,
+        observation.invalid_condition,
+        observation.priority,
+    )
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -978,6 +1114,10 @@ def main() -> int:
         return save_observations_command(args)
     if args.command == "list-observations":
         return list_observations_command(args)
+    if args.command == "list-duplicate-observations":
+        return list_duplicate_observations_command(args)
+    if args.command == "resolve-duplicate-observations":
+        return resolve_duplicate_observations_command(args)
     if args.command == "update-observation":
         return update_observation_command(args)
     if args.command == "review":

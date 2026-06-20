@@ -113,9 +113,9 @@ def build_knowledge_candidates(observations: list[Observation]) -> list[str]:
 def build_notion_candidates(observations: list[Observation]) -> list[str]:
     candidates: list[str] = []
     for observation in sorted(observations, key=lambda item: (item.status, item.trade_date, item.theme)):
-        if observation.status not in {"hit", "miss", "invalid"}:
+        if observation.status not in {"hit", "miss"}:
             continue
-        label = {"hit": "有效样本", "miss": "误判样本", "invalid": "失效样本"}[observation.status]
+        label = {"hit": "有效样本", "miss": "误判样本"}[observation.status]
         candidates.append(f"### {label} | {observation.theme} | {observation.trade_date.isoformat()}")
         candidates.append(f"- 假设：{observation.hypothesis}")
         candidates.append(f"- 验证条件：{observation.validation_condition}")
